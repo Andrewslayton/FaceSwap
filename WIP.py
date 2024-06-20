@@ -3,13 +3,11 @@ import dlib
 import numpy as np
 import pyvirtualcam
 from pyvirtualcam import PixelFormat
-from threading import Thread
 
 # Initialize dlib face detector and predictor
 detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor('shape_predictor_68_face_landmarks.dat')
 
-# Function to get Delaunay triangles
 def get_delaunay_triangles(rect, points):
     subdiv = cv2.Subdiv2D(rect)
     for p in points:
@@ -30,23 +28,24 @@ def get_delaunay_triangles(rect, points):
                 delaunay_triangles.append(indices)
     return delaunay_triangles
 
-# Function to apply affine transformation
 def apply_affine_transform(src, src_tri, dst_tri, size):
     warp_mat = cv2.getAffineTransform(np.float32(src_tri), np.float32(dst_tri))
     dst = cv2.warpAffine(src, warp_mat, (size[0], size[1]), None, flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
     return dst
 
-# Function to overlay the face
 def overlay_face(background_frame, face_frame):
-    gray_background = cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY)
-    gray_face = cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY)
-    faces_background = detector(gray_background)
-    faces_face = detector(gray_face)
+    gray_background = cv2.cuda_GpuMat()
+    gray_face = cv2.cuda_GpuMat()
+    gray_background.upload(cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY))
+    gray_face.upload(cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY))
+
+    faces_background = detector(gray_background.download())
+    faces_face = detector(gray_face.download())
     if len(faces_background) == 0 or len(faces_face) == 0:
         return background_frame
 
-    shape_background = predictor(gray_background, faces_background[0])
-    shape_face = predictor(gray_face, faces_face[0])
+    shape_background = predictor(gray_background.download(), faces_background[0])
+    shape_face = predictor(gray_face.download(), faces_face[0])
 
     points_background = np.array([[p.x, p.y] for p in shape_background.parts()], np.int32)
     points_face = np.array([[p.x, p.y] for p in shape_face.parts()], np.int32)
@@ -83,27 +82,14 @@ def overlay_face(background_frame, face_frame):
 
         background_frame[rect2[1]:rect2[1]+rect2[3], rect2[0]:rect2[0]+rect2[2]] = background_frame[rect2[1]:rect2[1]+rect2[3], rect2[0]:rect2[0]+rect2[2]] * (1 - mask) + img2_rect * mask
 
-    mask = np.zeros_like(gray_background)
+    mask = np.zeros_like(gray_background.download())
     cv2.fillConvexPoly(mask, cv2.convexHull(points_background), 255)
     r = cv2.boundingRect(cv2.convexHull(points_background))
     center = (r[0] + r[2] // 2, r[1] + r[3] // 2)
     seamless_clone = cv2.seamlessClone(background_frame, background_frame, mask, center, cv2.NORMAL_CLONE)
     return seamless_clone
 
-# Function to capture frames from the cameras
-def capture_frames():
-    global face_frame, background_frame, running
-    while running:
-        ret, face_frame_temp = cap.read()
-        ret2, background_frame_temp = cap2.read()
-        if not ret or not ret2:
-            break
-        face_frame = cv2.resize(face_frame_temp, (width, height))
-        background_frame = cv2.resize(background_frame_temp, (width, height))
-
-# Main function
 def main():
-    global cap, cap2, face_frame, background_frame, width, height, running
     cap = cv2.VideoCapture(3)
     cap2 = cv2.VideoCapture(0)
     if not cap.isOpened() or not cap2.isOpened():
@@ -117,23 +103,21 @@ def main():
     cap.set(cv2.CAP_PROP_FPS, pref_fps_in)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = 20
-
-    running = True
-    capture_thread = Thread(target=capture_frames)
-    capture_thread.start()
+    fps = 30
 
     with pyvirtualcam.Camera(width, height, fps, fmt=PixelFormat.BGR, device="Unity Video Capture") as cam:
-        while running:
-            if face_frame is not None and background_frame is not None:
-                frame = overlay_face(background_frame, face_frame)
-                cam.send(frame)
-                cam.sleep_until_next_frame()
+        while True:
+            ret, face_frame = cap.read()
+            ret2, background_frame = cap2.read()
+            if not ret or not ret2:
+                break
 
-    running = False
-    capture_thread.join()
+            face_frame = cv2.resize(face_frame, (width, height))
+            background_frame = cv2.resize(background_frame, (width, height))
+
+            frame = overlay_face(background_frame, face_frame)
+            cam.send(frame)
+            cam.sleep_until_next_frame()
 
 if __name__ == "__main__":
-    face_frame = None
-    background_frame = None
     main()
