@@ -15,7 +15,7 @@ else:
 detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor(LOL_FILE)
 
-def overlay_face(background_frame, face_frame, scale_factor=0.78):
+def overlay_face(background_frame, face_frame):
     gray_background = cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY)
     gray_face = cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY)
     
@@ -41,12 +41,11 @@ def overlay_face(background_frame, face_frame, scale_factor=0.78):
     rect_face = cv2.boundingRect(hull_face)
 
     rect_face = (
-        max(0, rect_face[0] + int(rect_face[2] * (1 - scale_factor) / 2)),
-        max(0, rect_face[1] + int(rect_face[3] * (1 - scale_factor) / 2)),
-        min(int(rect_face[2] * scale_factor), face_frame.shape[1] - rect_face[0]),
-        min(int(rect_face[3] * scale_factor), face_frame.shape[0] - rect_face[1])
+        max(0, rect_face[0]),
+        max(0, rect_face[1]),
+        min(rect_face[2], face_frame.shape[1] - rect_face[0]),
+        min(rect_face[3], face_frame.shape[0] - rect_face[1])
     )
-    
     rect_background = (
         max(0, rect_background[0]),
         max(0, rect_background[1]),
