@@ -5,13 +5,15 @@ import dlib
 import numpy as np
 import pyvirtualcam
 from pyvirtualcam import PixelFormat
+import mss
+import pyautogui
 
 # Initialize dlib face detector and predictor
 if getattr(sys, 'frozen', False):
     LOL_FILE = os.path.join(sys._MEIPASS, 'shape_predictor_68_face_landmarks.dat')
 else:
     LOL_FILE = 'shape_predictor_68_face_landmarks.dat'
-
+    
 detector = dlib.get_frontal_face_detector()
 predictor = dlib.shape_predictor(LOL_FILE)
 
@@ -69,45 +71,45 @@ def overlay_face(background_frame, face_frame):
     mask_face = np.zeros((h1, w1, 3), dtype=np.uint8)
     cv2.fillConvexPoly(mask_face, hull_face - np.array([x2, y2]), (255, 255, 255))
 
-    alpha = 0.5  
-    blended_face_region = cv2.addWeighted(face_region_resized, alpha, background_frame[y1:y1+h1, x1:x1+w1], 1 - alpha, 0)
-
-    background_frame[y1:y1+h1, x1:x1+w1] = blended_face_region
-
     seamless_clone = cv2.seamlessClone(
-        blended_face_region, background_frame, mask_face[:, :, 0], center, cv2.NORMAL_CLONE
+        face_region_resized, background_frame, mask_face[:, :, 0], center, cv2.MIXED_CLONE
     )
 
     return seamless_clone
 
 def main():
-    cap = cv2.VideoCapture(3)  
-    cap2 = cv2.VideoCapture(0)  
+    sct = mss.mss()
 
-    if not cap.isOpened() or not cap2.isOpened():
+    monitor = sct.monitors[1]  # Change the monitor index if necessary
+
+    cap2 = cv2.VideoCapture(0)
+
+    if not cap2.isOpened():
         raise RuntimeError('Could not open video sources')
 
     pref_width = 1280
     pref_height = 720
     pref_fps_in = 60
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, pref_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, pref_height)
-    cap.set(cv2.CAP_PROP_FPS, pref_fps_in)
     cap2.set(cv2.CAP_PROP_FRAME_WIDTH, pref_width)
     cap2.set(cv2.CAP_PROP_FRAME_HEIGHT, pref_height)
     cap2.set(cv2.CAP_PROP_FPS, pref_fps_in)
 
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = pref_width
+    height = pref_height
     fps = 60
 
     with pyvirtualcam.Camera(width, height, fps, fmt=PixelFormat.BGR, device="Unity Video Capture") as cam:
         while True:
-            ret1, face_frame = cap.read()
+            sct_img = sct.grab(monitor)
+            screen_frame = np.array(sct_img)[:, :, :3]
+            screen_frame = cv2.resize(screen_frame, (width, height))
+
             ret2, background_frame = cap2.read()
-            if not ret1 or not ret2:
+            if not ret2:
                 break
-            frame = overlay_face(background_frame, face_frame)
+
+            frame = overlay_face(background_frame, screen_frame)
+
             cam.send(frame)
             cam.sleep_until_next_frame()
 
