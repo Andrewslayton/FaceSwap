@@ -3,6 +3,8 @@ import dlib
 import numpy as np
 import pyvirtualcam
 from pyvirtualcam import PixelFormat
+import threading
+from queue import Queue
 
 # Initialize dlib face detector and predictor
 detector = dlib.get_frontal_face_detector()
@@ -34,18 +36,15 @@ def apply_affine_transform(src, src_tri, dst_tri, size):
     return dst
 
 def overlay_face(background_frame, face_frame):
-    gray_background = cv2.cuda_GpuMat()
-    gray_face = cv2.cuda_GpuMat()
-    gray_background.upload(cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY))
-    gray_face.upload(cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY))
-
-    faces_background = detector(gray_background.download())
-    faces_face = detector(gray_face.download())
+    gray_background = cv2.cvtColor(background_frame, cv2.COLOR_BGR2GRAY)
+    gray_face = cv2.cvtColor(face_frame, cv2.COLOR_BGR2GRAY)
+    faces_background = detector(gray_background)
+    faces_face = detector(gray_face)
     if len(faces_background) == 0 or len(faces_face) == 0:
         return background_frame
 
-    shape_background = predictor(gray_background.download(), faces_background[0])
-    shape_face = predictor(gray_face.download(), faces_face[0])
+    shape_background = predictor(gray_background, faces_background[0])
+    shape_face = predictor(gray_face, faces_face[0])
 
     points_background = np.array([[p.x, p.y] for p in shape_background.parts()], np.int32)
     points_face = np.array([[p.x, p.y] for p in shape_face.parts()], np.int32)
@@ -82,12 +81,22 @@ def overlay_face(background_frame, face_frame):
 
         background_frame[rect2[1]:rect2[1]+rect2[3], rect2[0]:rect2[0]+rect2[2]] = background_frame[rect2[1]:rect2[1]+rect2[3], rect2[0]:rect2[0]+rect2[2]] * (1 - mask) + img2_rect * mask
 
-    mask = np.zeros_like(gray_background.download())
+    mask = np.zeros_like(gray_background)
     cv2.fillConvexPoly(mask, cv2.convexHull(points_background), 255)
     r = cv2.boundingRect(cv2.convexHull(points_background))
     center = (r[0] + r[2] // 2, r[1] + r[3] // 2)
     seamless_clone = cv2.seamlessClone(background_frame, background_frame, mask, center, cv2.NORMAL_CLONE)
     return seamless_clone
+
+def capture_frame(cap, frame_queue, skip_frames):
+    count = 0
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        if count % skip_frames == 0:
+            frame_queue.put(frame)
+        count += 1
 
 def main():
     cap = cv2.VideoCapture(3)
@@ -95,8 +104,8 @@ def main():
     if not cap.isOpened() or not cap2.isOpened():
         raise RuntimeError('Could not open video source')
 
-    pref_width = 1280
-    pref_height = 720
+    pref_width = 640  
+    pref_height = 360
     pref_fps_in = 30
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, pref_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, pref_height)
@@ -105,11 +114,20 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = 30
 
+    frame_queue = Queue(maxsize=10)
+    skip_frames = 2 
+
+    t = threading.Thread(target=capture_frame, args=(cap, frame_queue, skip_frames))
+    t.start()
+
     with pyvirtualcam.Camera(width, height, fps, fmt=PixelFormat.BGR, device="Unity Video Capture") as cam:
         while True:
-            ret, face_frame = cap.read()
+            if frame_queue.empty():
+                continue
+
+            face_frame = frame_queue.get()
             ret2, background_frame = cap2.read()
-            if not ret or not ret2:
+            if not ret2:
                 break
 
             face_frame = cv2.resize(face_frame, (width, height))
@@ -118,6 +136,8 @@ def main():
             frame = overlay_face(background_frame, face_frame)
             cam.send(frame)
             cam.sleep_until_next_frame()
+
+    t.join()
 
 if __name__ == "__main__":
     main()
